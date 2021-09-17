@@ -44,14 +44,13 @@ class ClassifierModel:
 
     def set_input(self, data):
         input_edge_features = torch.from_numpy(data['edge_features']).float()
-        labels = torch.from_numpy(data['label']).long()
+        labels = torch.from_numpy(data['label']).float()
         # set inputs
         self.edge_features = input_edge_features.to(self.device).requires_grad_(self.is_train)
         self.labels = labels.to(self.device)
         self.mesh = data['mesh']
         if self.opt.dataset_mode == 'segmentation' and not self.is_train:
             self.soft_label = torch.from_numpy(data['soft_label'])
-
 
     def forward(self):
         out = self.net(self.edge_features, self.mesh)
@@ -109,9 +108,9 @@ class ClassifierModel:
         with torch.no_grad():
             out = self.forward()
             # compute number of correct
-            pred_class = out.data.max(1)[1]
+            pred_class = out
             label_class = self.labels
-            self.export_segmentation(pred_class.cpu())
+            self.export_segmentation(pred_class.cpu(), label_class.cpu())
             correct = self.get_accuracy(pred_class, label_class)
         return correct, len(label_class)
 
@@ -121,9 +120,14 @@ class ClassifierModel:
             correct = pred.eq(labels).sum()
         elif self.opt.dataset_mode == 'segmentation':
             correct = seg_accuracy(pred, self.soft_label, self.mesh)
+        elif self.opt.dataset_mode == 'texture':
+            correct = (pred - labels).mean() * pred.shape[0]
         return correct
 
-    def export_segmentation(self, pred_seg):
+    def export_segmentation(self, pred, label):
         if self.opt.dataset_mode == 'segmentation':
             for meshi, mesh in enumerate(self.mesh):
-                mesh.export_segments(pred_seg[meshi, :])
+                mesh.export_segments(pred[meshi, :])
+        if self.opt.dataset_mode == 'texture':
+            for meshi, mesh in enumerate(self.mesh):
+                mesh.export_texture(pred[meshi, :], label[meshi, :])

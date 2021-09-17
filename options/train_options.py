@@ -1,5 +1,6 @@
 from .base_options import BaseOptions
 
+
 class TrainOptions(BaseOptions):
     def initialize(self):
         BaseOptions.initialize(self)
@@ -25,4 +26,6 @@ class TrainOptions(BaseOptions):
         # tensorboard visualization
         self.parser.add_argument('--no_vis', action='store_true', help='will not use tensorboard')
         self.parser.add_argument('--verbose_plot', action='store_true', help='plots network weights, etc.')
+        # added
+        self.parser.add_argument('--use_single_view', action='store_true', help='single view for texture completion')
         self.is_train = True

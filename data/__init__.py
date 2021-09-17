@@ -1,6 +1,7 @@
 import torch.utils.data
 from data.base_dataset import collate_fn
 
+
 def CreateDataset(opt):
     """loads dataset class"""
 
@@ -10,6 +11,9 @@ def CreateDataset(opt):
     elif opt.dataset_mode == 'classification':
         from data.classification_data import ClassificationData
         dataset = ClassificationData(opt)
+    elif opt.dataset_mode == 'texture':
+        from data.texture_data import TextureData
+        dataset = TextureData(opt)
     return dataset
 
 

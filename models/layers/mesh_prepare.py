@@ -1,6 +1,7 @@
 import numpy as np
 import os
 import ntpath
+import trimesh
 
 
 def fill_mesh(mesh2fill, file: str, opt):
@@ -13,7 +14,7 @@ def fill_mesh(mesh2fill, file: str, opt):
                             edges_count=mesh_data.edges_count, ve=mesh_data.ve, v_mask=mesh_data.v_mask,
                             filename=mesh_data.filename, sides=mesh_data.sides,
                             edge_lengths=mesh_data.edge_lengths, edge_areas=mesh_data.edge_areas,
-                            features=mesh_data.features)
+                            features=mesh_data.features, edge_target_colors=mesh_data.edge_target_colors, faces=mesh_data.faces)
     mesh2fill.vs = mesh_data['vs']
     mesh2fill.edges = mesh_data['edges']
     mesh2fill.gemm_edges = mesh_data['gemm_edges']
@@ -25,16 +26,37 @@ def fill_mesh(mesh2fill, file: str, opt):
     mesh2fill.edge_areas = mesh_data['edge_areas']
     mesh2fill.features = mesh_data['features']
     mesh2fill.sides = mesh_data['sides']
+    mesh2fill.edge_target_colors = mesh_data['edge_target_colors']
+    mesh2fill.faces = mesh_data['faces']
+
 
 def get_mesh_path(file: str, num_aug: int):
     filename, _ = os.path.splitext(file)
-    dir_name = os.path.dirname(filename)
-    prefix = os.path.basename(filename)
+    dir_name = os.path.dirname(os.path.dirname(os.path.dirname(filename)))
+    prefix = os.path.basename(os.path.dirname(filename)) + "_" +os.path.basename(filename)
     load_dir = os.path.join(dir_name, 'cache')
+    if num_aug == 0:
+        num_aug = 1
     load_file = os.path.join(load_dir, '%s_%03d.npz' % (prefix, np.random.randint(0, num_aug)))
     if not os.path.isdir(load_dir):
         os.makedirs(load_dir, exist_ok=True)
     return load_file
+
+
+def get_target_filename(file):
+    return "_".join(file.split("_")[:-3]) + ".obj"
+
+
+def create_target_colors(target_colors, faces):
+    edge_colors = np.zeros((faces.shape[0], 3), dtype=target_colors.dtype)
+    for fidx in range(len(faces)):
+        edge_colors[fidx, :] = (target_colors[faces[fidx, 0], :] + target_colors[faces[fidx, 1], :]) / 2
+    return edge_colors
+
+
+def get_mesh_name(file):
+    return os.path.basename(os.path.dirname(file))
+
 
 def from_scratch(file, opt):
 
@@ -48,10 +70,25 @@ def from_scratch(file, opt):
     mesh_data.edges_count = None
     mesh_data.ve = None
     mesh_data.v_mask = None
-    mesh_data.filename = 'unknown'
+    mesh_data.filename = get_mesh_name(file)
     mesh_data.edge_lengths = None
+    mesh_data.input_colors = None
+    mesh_data.valid_colors = None
+    mesh_data.target_colors = None
+    mesh_data.faces = None
     mesh_data.edge_areas = []
-    mesh_data.vs, faces = fill_from_file(mesh_data, file)
+
+    # mesh_data.vs, faces = fill_from_file(mesh_data, file)
+
+    mesh = trimesh.load(get_target_filename(file), force='mesh', process=False)
+    mesh_input = trimesh.load(file, force='mesh', process=False)
+    mesh_data.target_colors = (mesh.visual.vertex_colors[:, :3] / 255).astype(np.float32) - 0.5
+    mesh_data.input_colors = (mesh_input.visual.vertex_colors[:, :3] / 255).astype(np.float32) - 0.5
+    mesh_data.valid_colors = mesh_input.visual.vertex_colors[:, 3] != 0
+    mesh_data.vs = mesh.vertices
+    mesh_data.faces = np.copy(mesh.faces)
+    faces = np.copy(mesh.faces)
+
     mesh_data.v_mask = np.ones(len(mesh_data.vs), dtype=bool)
     faces, face_areas = remove_non_manifolds(mesh_data, faces)
     if opt.num_aug > 1:
@@ -60,6 +97,7 @@ def from_scratch(file, opt):
     if opt.num_aug > 1:
         post_augmentation(mesh_data, opt)
     mesh_data.features = extract_features(mesh_data)
+    mesh_data.edge_target_colors = create_target_colors(mesh_data.target_colors, mesh_data.edges)
     return mesh_data
 
 def fill_from_file(mesh, file):
@@ -166,7 +204,7 @@ def compute_face_normals_and_areas(mesh, faces):
                             mesh.vs[faces[:, 2]] - mesh.vs[faces[:, 1]])
     face_areas = np.sqrt((face_normals ** 2).sum(axis=1))
     face_normals /= face_areas[:, np.newaxis]
-    assert (not np.any(face_areas[:, np.newaxis] == 0)), 'has zero area face: %s' % mesh.filename
+    # assert (not np.any(face_areas[:, np.newaxis] == 0)), 'has zero area face: %s' % mesh.filename
     face_areas *= 0.5
     return face_normals, face_areas
 
@@ -313,7 +351,7 @@ def extract_features(mesh):
     set_edge_lengths(mesh, edge_points)
     with np.errstate(divide='raise'):
         try:
-            for extractor in [dihedral_angle, symmetric_opposite_angles, symmetric_ratios]:
+            for extractor in [dihedral_angle, symmetric_opposite_angles, symmetric_ratios, input_color, valid_color]:
                 feature = extractor(mesh, edge_points)
                 features.append(feature)
             return np.concatenate(features, axis=0)
@@ -328,6 +366,14 @@ def dihedral_angle(mesh, edge_points):
     dot = np.sum(normals_a * normals_b, axis=1).clip(-1, 1)
     angles = np.expand_dims(np.pi - np.arccos(dot), axis=0)
     return angles
+
+
+def input_color(mesh, edge_points):
+    return ((mesh.input_colors[edge_points[:, 0]] + mesh.input_colors[edge_points[:, 1]]) / 2).T
+
+
+def valid_color(mesh, edge_points):
+    return np.logical_and(mesh.valid_colors[edge_points[:, 0]], mesh.valid_colors[edge_points[:, 1]]).reshape((1, -1))
 
 
 def symmetric_opposite_angles(mesh, edge_points):

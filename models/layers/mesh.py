@@ -1,8 +1,13 @@
+from pathlib import Path
 from tempfile import mkstemp
 from shutil import move
 import torch
 import numpy as np
 import os
+
+import torch_scatter
+import trimesh
+
 from models.layers.mesh_union import MeshUnion
 from models.layers.mesh_prepare import fill_mesh
 
@@ -13,7 +18,11 @@ class Mesh:
         self.vs = self.v_mask = self.filename = self.features = self.edge_areas = None
         self.edges = self.gemm_edges = self.sides = None
         self.pool_count = 0
+        self.faces = None
+        self.edge_target_colors = None
         fill_mesh(self, file, opt)
+        self.original_vs = np.copy(self.vs)
+        self.original_edges = np.copy(self.edges)
         self.export_folder = export_folder
         self.history_data = None
         if hold_history:
@@ -73,11 +82,7 @@ class Mesh:
 
     def export(self, file=None, vcolor=None):
         if file is None:
-            if self.export_folder:
-                filename, file_extension = os.path.splitext(self.filename)
-                file = '%s/%s_%d%s' % (self.export_folder, filename, self.pool_count, file_extension)
-            else:
-                return
+            return
         faces = []
         vs = self.vs[self.v_mask]
         gemm = np.array(self.gemm_edges)
@@ -121,6 +126,22 @@ class Mesh:
             if i < len(self.history_data['edges_mask']):
                 cur_segments = segments[:len(self.history_data['edges_mask'][i])]
                 cur_segments = cur_segments[self.history_data['edges_mask'][i]]
+
+    def export_texture(self, prediction, target, epoch=0):
+        if not self.export_folder:
+            return
+        cat_predictions = torch.cat([prediction.T, prediction.T], dim=0).float()
+        cat_targets = torch.cat([target.T, target.T], dim=0).float()
+        cat_idx = torch.cat([torch.from_numpy(self.original_edges[:, 0]), torch.from_numpy(self.original_edges[:, 1])], dim=0).long()
+        vertex_colors_predicted = torch.zeros((self.original_vs.shape[0], cat_predictions.shape[1])).float()
+        vertex_colors_target = torch.zeros((self.original_vs.shape[0], cat_targets.shape[1])).float()
+        torch_scatter.scatter_mean(cat_predictions, cat_idx, dim=0, out=vertex_colors_predicted)
+        torch_scatter.scatter_mean(cat_targets, cat_idx, dim=0, out=vertex_colors_target)
+        file_pred = f'{self.export_folder}/{epoch:05d}/{self.filename}_pred.obj'
+        file_target = f'{self.export_folder}/{epoch:05d}/{self.filename}_gt.obj'
+        Path(file_pred).parent.mkdir(exist_ok=True, parents=True)
+        trimesh.Trimesh(vertices=self.original_vs, faces=self.faces, vertex_colors=np.clip(vertex_colors_predicted + 0.5, 0, 1), process=False).export(file_pred)
+        trimesh.Trimesh(vertices=self.original_vs, faces=self.faces, vertex_colors=vertex_colors_target + 0.5, process=False).export(file_target)
 
     def __get_cycle(self, gemm, edge_id):
         cycles = []

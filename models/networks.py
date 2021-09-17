@@ -110,11 +110,14 @@ def define_classifier(input_nc, ncf, ninput_edges, nclasses, opt, gpu_ids, arch,
         raise NotImplementedError('Encoder model name [%s] is not recognized' % arch)
     return init_net(net, init_type, init_gain, gpu_ids)
 
+
 def define_loss(opt):
     if opt.dataset_mode == 'classification':
         loss = torch.nn.CrossEntropyLoss()
     elif opt.dataset_mode == 'segmentation':
         loss = torch.nn.CrossEntropyLoss(ignore_index=-1)
+    elif opt.dataset_mode == 'texture':
+        loss = torch.nn.L1Loss(reduction='mean')
     return loss
 
 ##############################################################################
@@ -240,12 +243,14 @@ class DownConv(nn.Module):
 
 
 class UpConv(nn.Module):
+
     def __init__(self, in_channels, out_channels, blocks=0, unroll=0, residual=True,
-                 batch_norm=True, transfer_data=True):
+                 batch_norm=True, transfer_data=True, output_layer=False):
         super(UpConv, self).__init__()
         self.residual = residual
         self.bn = []
         self.unroll = None
+        self.output_layer = output_layer
         self.transfer_data = transfer_data
         self.up_conv = MeshConv(in_channels, out_channels)
         if transfer_data:
@@ -284,7 +289,10 @@ class UpConv(nn.Module):
                 x2 = self.bn[idx + 1](x2)
             if self.residual:
                 x2 = x2 + x1
-            x2 = F.relu(x2)
+            if not(idx == len(self.conv2) - 1 and self.output_layer):
+                x2 = F.relu(x2)
+            else:
+                x2 = F.tanh(x2) * 0.5
             x1 = x2
         x2 = x2.squeeze(3)
         return x2
@@ -361,7 +369,7 @@ class MeshDecoder(nn.Module):
             self.up_convs.append(UpConv(convs[i], convs[i + 1], blocks=blocks, unroll=unroll,
                                         batch_norm=batch_norm, transfer_data=transfer_data))
         self.final_conv = UpConv(convs[-2], convs[-1], blocks=blocks, unroll=False,
-                                 batch_norm=batch_norm, transfer_data=False)
+                                 batch_norm=batch_norm, transfer_data=False, output_layer=True)
         self.up_convs = nn.ModuleList(self.up_convs)
         reset_params(self)
 
